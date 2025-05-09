@@ -1,56 +1,101 @@
 import * as THREE from 'three'
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Canvas, extend, useFrame } from '@react-three/fiber'
 import { Image, ScrollControls, useScroll, Billboard, Text } from '@react-three/drei'
 import { suspend } from 'suspend-react'
-import { generate } from 'random-words'
 import { easing, geometry } from 'maath'
+import { useSanityCategories } from './hooks/useSanityCategories'
 
 extend(geometry)
 const inter = import('@pmndrs/assets/fonts/inter_regular.woff')
 
-export const App = () => (
-  <Canvas dpr={[1, 1.5]}>
-    <ScrollControls pages={4} infinite>
-      <Scene position={[0, 1.5, 0]} />
-    </ScrollControls>
-  </Canvas>
-)
+export const App = () => {
+  // 使用Sanity数据钩子
+  const { categories, loading } = useSanityCategories()
+  
+  // 显示加载状态
+  if (loading) {
+    return <div className="loading">正在加载数据...</div>
+  }
+  
+  // 正常渲染3D卡片展示
+  return (
+    <Canvas dpr={[1, 1.5]}>
+      <ScrollControls pages={4} infinite>
+        <Scene position={[0, 1.5, 0]} categories={categories} />
+      </ScrollControls>
+    </Canvas>
+  )
+}
 
-function Scene({ children, ...props }) {
+function Scene({ categories, children, ...props }) {
   const ref = useRef()
   const scroll = useScroll()
   const [hovered, hover] = useState(null)
+  const [activeCategory, setActiveCategory] = useState(null)
+  const [activeImageIndex, setActiveImageIndex] = useState(null)
+  
   useFrame((state, delta) => {
     ref.current.rotation.y = -scroll.offset * (Math.PI * 2) // Rotate contents
     state.events.update() // Raycasts every frame rather than on pointer-move
     easing.damp3(state.camera.position, [-state.pointer.x * 2, state.pointer.y * 2 + 4.5, 9], 0.3, delta)
     state.camera.lookAt(0, 0, 0)
   })
+  
+  // 计算每个类别占据的弧度
+  const categoryAngle = (Math.PI * 2) / categories.length
+  
   return (
     <group ref={ref} {...props}>
-      <Cards category="spring" from={0} len={Math.PI / 4} onPointerOver={hover} onPointerOut={hover} />
-      <Cards category="summer" from={Math.PI / 4} len={Math.PI / 2} position={[0, 0.4, 0]} onPointerOver={hover} onPointerOut={hover} />
-      <Cards category="autumn" from={Math.PI / 4 + Math.PI / 2} len={Math.PI / 2} onPointerOver={hover} onPointerOut={hover} />
-      <Cards category="winter" from={Math.PI * 1.25} len={Math.PI * 2 - Math.PI * 1.25} position={[0, -0.4, 0]} onPointerOver={hover} onPointerOut={hover} />
-      <ActiveCard hovered={hovered} />
+      {categories.map((category, index) => {
+        const from = index * categoryAngle
+        const len = categoryAngle
+        const verticalOffset = index % 2 === 0 ? 0 : (index % 4 === 1 ? 0.4 : -0.4) // 交替的垂直位置
+        
+        return (
+          <Cards 
+            key={category.name}
+            categoryData={category}
+            from={from} 
+            len={len} 
+            position={[0, verticalOffset, 0]}
+            onPointerOver={(imgIndex) => {
+              hover(imgIndex)
+              setActiveCategory(index)
+              setActiveImageIndex(imgIndex)
+            }} 
+            onPointerOut={() => {
+              hover(null)
+              setActiveCategory(null)
+              setActiveImageIndex(null)
+            }}
+          />
+        )
+      })}
+      <ActiveCard 
+        hovered={hovered} 
+        categoryData={activeCategory !== null ? categories[activeCategory] : null}
+        imageIndex={activeImageIndex}
+      />
     </group>
   )
 }
 
-function Cards({ category, data, from = 0, len = Math.PI * 2, radius = 5.25, onPointerOver, onPointerOut, ...props }) {
+function Cards({ categoryData, from = 0, len = Math.PI * 2, radius = 5.25, onPointerOver, onPointerOut, ...props }) {
   const [hovered, hover] = useState(null)
-  const amount = Math.round(len * 22)
-  const textPosition = from + (amount / 2 / amount) * len
+  const { name, images } = categoryData
+  const amount = Math.min(Math.round(len * 22), images.length)
+  const textPosition = from + (len / 2)
+  
   return (
     <group {...props}>
       <Billboard position={[Math.sin(textPosition) * radius * 1.4, 0.5, Math.cos(textPosition) * radius * 1.4]}>
-        <Text font={suspend(inter).default} fontSize={0.25} anchorX="center" color="black">
-          {category}
+        <Text font={suspend(inter).default} fontSize={0.3} anchorX="center" color="black">
+          {name}
         </Text>
       </Billboard>
-      {Array.from({ length: amount - 3 /* minus 3 images at the end, creates a gap */ }, (_, i) => {
-        const angle = from + (i / amount) * len
+      {images.slice(0, amount).map((image, i) => {
+        const angle = from + (i / (amount + 3)) * len
         return (
           <Card
             key={angle}
@@ -60,7 +105,8 @@ function Cards({ category, data, from = 0, len = Math.PI * 2, radius = 5.25, onP
             rotation={[0, Math.PI / 2 + angle, 0]}
             active={hovered !== null}
             hovered={hovered === i}
-            url={`/img${Math.floor(i % 10) + 1}.jpg`}
+            url={image.url}
+            imageData={image}
           />
         )
       })}
@@ -68,34 +114,70 @@ function Cards({ category, data, from = 0, len = Math.PI * 2, radius = 5.25, onP
   )
 }
 
-function Card({ url, active, hovered, ...props }) {
+function Card({ url, imageData, active, hovered, ...props }) {
   const ref = useRef()
+  
+  // 16:9比例计算
+  const width = 1.618
+  const height = width * (9/16)
+  
   useFrame((state, delta) => {
     const f = hovered ? 1.4 : active ? 1.25 : 1
     easing.damp3(ref.current.position, [0, hovered ? 0.25 : 0, 0], 0.1, delta)
-    easing.damp3(ref.current.scale, [1.618 * f, 1 * f, 1], 0.15, delta)
+    easing.damp3(ref.current.scale, [width * f, height * f, 1], 0.15, delta)
   })
+  
   return (
     <group {...props}>
-      <Image ref={ref} transparent radius={0.075} url={url} scale={[1.618, 1, 1]} side={THREE.DoubleSide} />
+      <Image ref={ref} transparent radius={0.075} url={url} scale={[width, height, 1]} side={THREE.DoubleSide} />
     </group>
   )
 }
 
-function ActiveCard({ hovered, ...props }) {
+function ActiveCard({ hovered, categoryData, imageIndex, ...props }) {
   const ref = useRef()
-  const name = useMemo(() => generate({ exactly: 2 }).join(' '), [hovered])
-  useLayoutEffect(() => void (ref.current.material.zoom = 0.8), [hovered])
+  
+  useLayoutEffect(() => {
+    if (ref.current?.material) {
+      ref.current.material.zoom = 0.8
+    }
+  }, [hovered])
+  
   useFrame((state, delta) => {
-    easing.damp(ref.current.material, 'zoom', 1, 0.5, delta)
-    easing.damp(ref.current.material, 'opacity', hovered !== null, 0.3, delta)
+    if (ref.current?.material) {
+      easing.damp(ref.current.material, 'zoom', 1, 0.5, delta)
+      easing.damp(ref.current.material, 'opacity', hovered !== null, 0.3, delta)
+    }
   })
+  
+  // 如果没有选中任何图片，不显示详情
+  if (!categoryData || imageIndex === null || imageIndex >= categoryData.images.length) {
+    return null
+  }
+  
+  const imageData = categoryData.images[imageIndex]
+  
+  // 16:9比例计算
+  const width = 4.0
+  const height = width * (9/16)
+  const centerY = 1.5
+  
   return (
     <Billboard {...props}>
-      <Text font={suspend(inter).default} fontSize={0.5} position={[2.15, 3.85, 0]} anchorX="left" color="black">
-        {hovered !== null && `${name}\n${hovered}`}
+      <Text font={suspend(inter).default} fontSize={0.5} position={[width / 2 + 0.5, centerY + height / 2 + 0.5, 0]} anchorX="left" color="black">
+        {imageData.title}
       </Text>
-      <Image ref={ref} transparent radius={0.3} position={[0, 1.5, 0]} scale={[3.5, 1.618 * 3.5, 0.2, 1]} url={`/img${Math.floor(hovered % 10) + 1}.jpg`} />
+      <Text font={suspend(inter).default} fontSize={0.25} position={[width / 2 + 0.5, centerY + height / 2, 0]} anchorX="left" color="black" maxWidth={3}>
+        {imageData.description}
+      </Text>
+      <Image 
+        ref={ref} 
+        transparent 
+        radius={0.3} 
+        position={[0, centerY, 0]} 
+        scale={[width, height, 0.2]} 
+        url={imageData.url} 
+      />
     </Billboard>
   )
 }
