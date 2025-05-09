@@ -3,7 +3,7 @@ import { createClient } from '@sanity/client'
 
 // 创建Sanity客户端
 export const client = createClient({
-  projectId: '你的项目ID', // 替换为你的实际Sanity项目ID
+  projectId: 'w04355b9', // 替换为你的实际Sanity项目ID
   dataset: 'production',
   apiVersion: '2023-05-03',
   useCdn: false
